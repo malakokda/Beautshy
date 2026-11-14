@@ -1,0 +1,167 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system definition.
+ *
+ * The @theme inline block maps CSS custom properties to Tailwind utility
+ * classes (e.g. --color-primary -> bg-primary, text-primary).
+ *
+ * The :root and .dark blocks define the actual color values using oklch.
+ * All colors MUST use oklch format.
+ *
+ * To add a new semantic color:
+ * 1. Add the variable to :root (light value) and .dark (dark value)
+ * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ */
+
+@theme inline {
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Karla", ui-sans-serif, system-ui, sans-serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-blush-petal: var(--blush-petal);
+  --color-tulip-bloom: var(--tulip-bloom);
+  --color-crushed-rose: var(--crushed-rose);
+  --color-spring-olive: var(--spring-olive);
+  --color-deep-garden: var(--deep-garden);
+}
+
+:root {
+  --radius: 0.875rem;
+
+  /* Brand palette */
+  --blush-petal: oklch(0.7996 0.0603 2.57);
+  --tulip-bloom: oklch(0.6667 0.1173 9.77);
+  --crushed-rose: oklch(0.4338 0.1359 10.99);
+  --spring-olive: oklch(0.519 0.088 95.67);
+  --deep-garden: oklch(0.2691 0.0581 108.3);
+
+  /* Tints derived from the palette (same hues) */
+  --blush-light: oklch(0.9 0.03 2.57);
+  --blush-lighter: oklch(0.94 0.02 2.57);
+  --blush-deep: oklch(0.72 0.06 2.57);
+  --olive-light: oklch(0.86 0.04 95.67);
+
+  --background: var(--blush-petal);
+  --foreground: var(--crushed-rose);
+  --card: var(--blush-petal);
+  --card-foreground: var(--deep-garden);
+  --popover: var(--blush-lighter);
+  --popover-foreground: var(--deep-garden);
+  --primary: var(--crushed-rose);
+  --primary-foreground: var(--blush-lighter);
+  --secondary: var(--blush-light);
+  --secondary-foreground: var(--deep-garden);
+  --muted: var(--blush-light);
+  --muted-foreground: oklch(0.42 0.07 100);
+  --accent: var(--tulip-bloom);
+  --accent-foreground: var(--deep-garden);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: var(--blush-deep);
+  --input: var(--blush-deep);
+  --ring: var(--tulip-bloom);
+  --glow: var(--tulip-bloom);
+  --chart-1: var(--crushed-rose);
+  --chart-2: var(--spring-olive);
+  --chart-3: var(--tulip-bloom);
+  --chart-4: var(--deep-garden);
+  --chart-5: var(--blush-petal);
+  --sidebar: var(--blush-light);
+  --sidebar-foreground: var(--deep-garden);
+  --sidebar-primary: var(--crushed-rose);
+  --sidebar-primary-foreground: var(--blush-lighter);
+  --sidebar-accent: var(--blush-petal);
+  --sidebar-accent-foreground: var(--deep-garden);
+  --sidebar-border: var(--blush-deep);
+  --sidebar-ring: var(--tulip-bloom);
+}
+
+.dark {
+  --background: var(--deep-garden);
+  --foreground: var(--blush-petal);
+  --card: oklch(0.32 0.06 108.3);
+  --card-foreground: var(--blush-petal);
+  --popover: oklch(0.32 0.06 108.3);
+  --popover-foreground: var(--blush-petal);
+  --primary: var(--tulip-bloom);
+  --primary-foreground: var(--deep-garden);
+  --secondary: var(--spring-olive);
+  --secondary-foreground: var(--blush-lighter);
+  --muted: oklch(0.34 0.06 108.3);
+  --muted-foreground: oklch(0.72 0.05 2.57);
+  --accent: var(--crushed-rose);
+  --accent-foreground: var(--blush-lighter);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(0.4 0.06 108.3);
+  --input: oklch(0.4 0.06 108.3);
+  --ring: var(--tulip-bloom);
+  --glow: var(--tulip-bloom);
+  --chart-1: var(--tulip-bloom);
+  --chart-2: var(--spring-olive);
+  --chart-3: var(--blush-petal);
+  --chart-4: var(--crushed-rose);
+  --chart-5: var(--olive-light);
+  --sidebar: oklch(0.32 0.06 108.3);
+  --sidebar-foreground: var(--blush-petal);
+  --sidebar-primary: var(--tulip-bloom);
+  --sidebar-primary-foreground: var(--deep-garden);
+  --sidebar-accent: oklch(0.38 0.06 108.3);
+  --sidebar-accent-foreground: var(--blush-petal);
+  --sidebar-border: oklch(0.4 0.06 108.3);
+  --sidebar-ring: var(--tulip-bloom);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+}
