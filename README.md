@@ -1,4 +1,4 @@
-# GlowSouq
+# Beautshy
 
 Sign in, then search a cosmetics product by name (or paste a product link) and see the 10 cheapest
 offers from Egyptian online stores, cheapest first.

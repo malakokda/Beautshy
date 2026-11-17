@@ -1,4 +1,4 @@
-# GlowSouq: how it works, and how I would build it again
+# Beautshy: how it works, and how I would build it again
 
 This document explains the whole website: what it does, the languages and tools it
 uses and why, the logic of a search, the matching algorithm, accounts and plans, and

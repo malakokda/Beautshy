@@ -18,7 +18,7 @@ type Runner = {
 
 // Kept on globalThis so a code reload during development reuses the open
 // database instead of opening the same local files twice.
-const shared = globalThis as { __glowsouqDb?: Promise<Runner> | undefined };
+const shared = globalThis as { __beautshyDb?: Promise<Runner> | undefined };
 
 async function connect(): Promise<Runner> {
   const url = process.env["DATABASE_URL"];
@@ -62,10 +62,10 @@ export async function query<T = Record<string, unknown>>(
   sql: string,
   params: unknown[] = [],
 ): Promise<T[]> {
-  shared.__glowsouqDb ??= connect().catch((err: unknown) => {
-    shared.__glowsouqDb = undefined; // try again on the next request
+  shared.__beautshyDb ??= connect().catch((err: unknown) => {
+    shared.__beautshyDb = undefined; // try again on the next request
     throw err;
   });
-  const runner = await shared.__glowsouqDb;
+  const runner = await shared.__beautshyDb;
   return (await runner.query(sql, params)).rows as T[];
 }

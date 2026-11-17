@@ -1,6 +1,6 @@
-# GlowSouq: summary
+# Beautshy: summary
 
-GlowSouq is a price-comparison website for makeup and skincare in Egypt. A visitor types a
+Beautshy is a price-comparison website for makeup and skincare in Egypt. A visitor types a
 product name, or pastes a product link, and the site shows the cheapest offers for that
 product across Egyptian beauty stores, with a link to each store.
 

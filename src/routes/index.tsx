@@ -28,13 +28,13 @@ type SearchState = {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "GlowSouq — Top 10 Cheapest Cosmetics Prices in Egypt" },
+      { title: "Beautshy — Top 10 Cheapest Cosmetics Prices in Egypt" },
       {
         name: "description",
         content:
           "Search any cosmetics product and compare the 10 cheapest offers from Egyptian online stores, including Amazon Egypt.",
       },
-      { property: "og:title", content: "GlowSouq — Top 10 Cheapest Cosmetics Prices in Egypt" },
+      { property: "og:title", content: "Beautshy — Top 10 Cheapest Cosmetics Prices in Egypt" },
       {
         property: "og:description",
         content:

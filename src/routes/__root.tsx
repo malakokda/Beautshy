@@ -73,12 +73,12 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "GlowSouq" },
+      { title: "Beautshy" },
       {
         name: "description",
         content: "Find the 10 cheapest prices for cosmetics products online.",
       },
-      { property: "og:title", content: "GlowSouq" },
+      { property: "og:title", content: "Beautshy" },
       {
         property: "og:description",
         content: "Find the 10 cheapest prices for cosmetics products online.",
