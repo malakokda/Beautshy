@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
+import { AccountBar, AdminPanel, AuthCard, UpgradeCard } from "@/components/account";
+import { getMyAccount } from "@/lib/account.functions";
+import type { Account } from "@/lib/plans";
 import { listStores, searchPrices } from "@/lib/search.functions";
 import type { Offer } from "@/lib/price-results";
 
@@ -10,7 +13,7 @@ const EXAMPLES = ["Garnier Micellar Water 400ml", "Cerave Foaming Cleanser", "Vi
 type SearchState = {
   phase: "idle" | "loading" | "done" | "failed";
   query: string;
-  /** The product name actually searched (the name read from a pasted link). */
+  /** The product name actually searched (spelling fixed, or read from a pasted link). */
   term?: string;
   /** What was typed, when the spelling was fixed. */
   typed?: string;
@@ -44,14 +47,13 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-function formatPrice(price: number, currency = "EGP") {
+function formatPrice(price: number, currency: string) {
   return `${currency} ${price.toLocaleString("en-EG", { maximumFractionDigits: 2 })}`;
 }
 
 function Index() {
   const searchPricesFn = useServerFn(searchPrices);
 
-  const [mode, setMode] = useState<"name" | "url">("name");
   const [input, setInput] = useState("");
   const [search, setSearch] = useState<SearchState>({ phase: "idle", query: "", results: [] });
 
@@ -66,13 +68,36 @@ function Index() {
       .catch(() => {});
   }, [listStoresFn, search.phase]);
 
+  // Who is signed in: undefined while loading, null when nobody is.
+  const getMyAccountFn = useServerFn(getMyAccount);
+  const [account, setAccount] = useState<Account | null>();
+  const [accountsDown, setAccountsDown] = useState(false);
+  const refreshAccount = useCallback(
+    () =>
+      getMyAccountFn()
+        .then((loaded) => {
+          setAccount(loaded);
+          setAccountsDown(false);
+        })
+        .catch(() => {
+          setAccount(null);
+          setAccountsDown(true);
+        }),
+    [getMyAccountFn],
+  );
+  useEffect(() => {
+    void refreshAccount();
+  }, [refreshAccount]);
+  /** True when a free account has no searches left. */
+  const outOfSearches = account?.searchesLeft === 0;
+
   const runSearch = useCallback(
-    async (rawQuery: string, searchMode: "name" | "url") => {
+    async (rawQuery: string) => {
       const query = rawQuery.trim();
       if (query.length < 2) return;
       setSearch({ phase: "loading", query, results: [] });
       try {
-        const res = await searchPricesFn({ data: { query, mode: searchMode } });
+        const res = await searchPricesFn({ data: { query } });
         setSearch(
           res.ok
             ? {
@@ -84,7 +109,7 @@ function Index() {
                 ...(res.typed ? { typed: res.typed } : {}),
                 ...(res.notice ? { notice: res.notice } : {}),
               }
-            : { phase: "failed", query, term: res.term, results: [], error: res.error },
+            : { phase: "failed", query, results: [], error: res.error },
         );
       } catch {
         setSearch({
@@ -94,13 +119,15 @@ function Index() {
           error: "Something went wrong. Please try again.",
         });
       }
+      // The search may have used up a free search, or the sign-in may have expired.
+      void refreshAccount();
     },
-    [searchPricesFn],
+    [searchPricesFn, refreshAccount],
   );
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    void runSearch(input, mode);
+    void runSearch(input);
   };
 
   return (
@@ -125,87 +152,90 @@ function Index() {
       <main className="mx-auto max-w-3xl px-6 pb-24">
         {/* Search card */}
         <section className="-mt-6 rounded-2xl border border-border bg-card p-5 shadow-lg shadow-primary/5 sm:p-6">
-          <div className="mb-4 flex gap-1 rounded-lg bg-muted p-1 text-sm font-semibold">
-            {(
-              [
-                ["name", "Search by name"],
-                ["url", "Paste product or store link"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setMode(value)}
-                aria-pressed={mode === value}
-                className={`flex-1 rounded-md px-3 py-2 transition-colors ${
-                  mode === value
-                    ? "bg-card text-primary shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <form onSubmit={onSubmit} className="flex flex-col gap-3 sm:flex-row">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                mode === "name"
-                  ? "e.g. Garnier Micellar Water 400ml"
-                  : "https://… product page or store link"
-              }
-              aria-label="Product to search for"
-              className="min-w-0 flex-1 rounded-lg border border-input bg-background px-4 py-3 text-base outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:ring-2 focus:ring-ring/30"
-            />
-            <button
-              type="submit"
-              disabled={search.phase === "loading" || input.trim().length < 2}
-              className="rounded-lg bg-primary px-6 py-3 text-base font-bold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-            >
-              Find prices
-            </button>
-          </form>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Try:
-            </span>
-            {EXAMPLES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                onClick={() => {
-                  setInput(example);
-                  void runSearch(example, "name");
+          {account === undefined && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {account === null && (
+            <>
+              {accountsDown && (
+                <p role="alert" className="mb-4 text-sm font-semibold text-destructive">
+                  Accounts are not available right now. Please try again later.
+                </p>
+              )}
+              <AuthCard onSignedIn={setAccount} />
+            </>
+          )}
+          {account && (
+            <>
+              <AccountBar
+                account={account}
+                onSignedOut={() => {
+                  setAccount(null);
+                  setSearch({ phase: "idle", query: "", results: [] });
                 }}
-                className="rounded-full border border-border bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground transition-colors hover:border-primary hover:text-primary"
-              >
-                {example}
-              </button>
-            ))}
-          </div>
+              />
+              <form onSubmit={onSubmit} className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Product name, or a link to a product or store"
+                  aria-label="Product to search for"
+                  className="min-w-0 flex-1 rounded-lg border border-input bg-background px-4 py-3 text-base outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:ring-2 focus:ring-ring/30"
+                />
+                <button
+                  type="submit"
+                  disabled={search.phase === "loading" || input.trim().length < 2 || outOfSearches}
+                  className="rounded-lg bg-primary px-6 py-3 text-base font-bold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                >
+                  Find prices
+                </button>
+              </form>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Try:
+                </span>
+                {EXAMPLES.map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    disabled={outOfSearches}
+                    onClick={() => {
+                      setInput(example);
+                      void runSearch(example);
+                    }}
+                    className="rounded-full border border-border bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground transition-colors hover:border-primary hover:text-primary"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </section>
 
         {/* Results */}
-        <section className="mt-10" aria-live="polite">
-          {search.phase === "idle" && <IdleState />}
-          {search.phase === "loading" && <PendingState query={search.query} />}
-          {search.phase === "failed" && (
-            <ErrorState message={search.error ?? "The search failed."} />
-          )}
-          {search.phase === "done" && (
-            <ResultsList
-              results={search.results}
-              term={search.term}
-              typed={search.typed}
-              approximate={search.approximate}
-              notice={search.notice}
-            />
-          )}
-        </section>
+        {account && (
+          <section className="mt-10" aria-live="polite">
+            {search.phase === "idle" && !outOfSearches && <IdleState />}
+            {search.phase === "loading" && <PendingState query={search.query} />}
+            {search.phase === "failed" && !outOfSearches && (
+              <ErrorState message={search.error ?? "The search failed."} />
+            )}
+            {search.phase === "done" && (
+              <ResultsList
+                results={search.results}
+                term={search.term}
+                typed={search.typed}
+                approximate={search.approximate}
+                notice={search.notice}
+              />
+            )}
+            {outOfSearches && search.phase !== "loading" && (
+              <div className={search.phase === "done" ? "mt-8" : ""}>
+                <UpgradeCard account={account} onChanged={setAccount} />
+              </div>
+            )}
+          </section>
+        )}
 
         {stores.length > 0 && (
           <section className="mt-10">
@@ -231,6 +261,8 @@ function Index() {
             </p>
           </section>
         )}
+
+        {account?.isAdmin && <AdminPanel />}
       </main>
 
       <footer className="border-t border-border bg-secondary/40 py-8 text-center text-xs text-muted-foreground">

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Forgiving product-name matching: finds the most suitable products even when
  * the search is misspelled ("garnir micelar") or only part of the name ("cerav clean").
  *
@@ -13,7 +13,7 @@
 
 const SIZE_UNITS = "ml|l|g|gm|gr|kg|mg|oz";
 /** Joining words that do not have to appear in the product name. */
-const IGNORED_WORDS = new Set(["and", "with", "for", "of", "the", "in", "و", "مع"]);
+const IGNORED_WORDS = new Set(["and", "with", "for", "of", "the", "in", "Ùˆ", "Ù…Ø¹"]);
 
 const QUALITY_PLURAL = 0.95;
 const QUALITY_PREFIX = 0.9;
@@ -32,8 +32,8 @@ function normalize(text: string): string {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/مل/g, "ml")
-    .replace(/جم|جرام/g, "g")
+    .replace(/Ù…Ù„/g, "ml")
+    .replace(/Ø¬Ù…|Ø¬Ø±Ø§Ù…/g, "g")
     .replace(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(${SIZE_UNITS})\\b`, "g"), "$1$2")
     .replace(/\b(\d+(?:\.\d+)?)(gm|gr)\b/g, "$1g");
 }
@@ -47,24 +47,38 @@ export function tokens(text: string): string[] {
 }
 
 /** How often each word appears in the stores' product names. */
-export type Vocabulary = Map<string, number>;
-
-/** A product (or anything else) together with the words of its name. */
-export type Entry<T> = { item: T; words: Set<string> };
+type Vocabulary = Map<string, number>;
 
 /**
- * The words of a product name, plus every pair of neighbouring words joined,
- * so "Sebio-Control" also answers to "sebiocontrol" and "make up" to "makeup".
- * When a vocabulary is given, the single words are counted into it.
+ * A set of products prepared for searching. `postings` lists, for every word,
+ * the products whose name contains it, so a search only looks at products that
+ * share a word with it instead of reading every product.
  */
-export function wordSet(text: string, vocabulary?: Vocabulary): Set<string> {
-  const words = tokens(text);
-  const set = new Set(words);
-  if (vocabulary) {
-    for (const word of set) vocabulary.set(word, (vocabulary.get(word) ?? 0) + 1);
-  }
-  for (let i = 0; i + 1 < words.length; i++) set.add(words[i]! + words[i + 1]!);
-  return set;
+export type Index<T> = {
+  items: T[];
+  vocabulary: Vocabulary;
+  /** word -> positions in `items` of the products that have it */
+  postings: Map<string, number[]>;
+};
+
+/** Prepare products for searching. `text` is what a product is matched on. */
+export function buildIndex<T>(entries: { item: T; text: string }[]): Index<T> {
+  const vocabulary: Vocabulary = new Map();
+  const postings = new Map<string, number[]>();
+  entries.forEach(({ text }, position) => {
+    const words = tokens(text);
+    const unique = new Set(words);
+    for (const word of unique) vocabulary.set(word, (vocabulary.get(word) ?? 0) + 1);
+    // Every pair of neighbouring words is also stored joined, so "Sebio-Control"
+    // answers to "sebiocontrol" and "make up" to "makeup".
+    for (let i = 0; i + 1 < words.length; i++) unique.add(words[i]! + words[i + 1]!);
+    for (const word of unique) {
+      const list = postings.get(word);
+      if (list) list.push(position);
+      else postings.set(word, [position]);
+    }
+  });
+  return { items: entries.map((e) => e.item), vocabulary, postings };
 }
 
 /** Typos allowed for a word of this length. Short words are too easy to confuse. */
@@ -152,47 +166,67 @@ function expandToken(token: string, vocabularies: Vocabulary[]): ExpandedToken {
   return { token, variants, unknown: timesSeen === 0 };
 }
 
-/** How well each search word is found in one product (0 = not found). */
-function wordQualities(expanded: ExpandedToken[], words: Set<string>): number[] {
-  const qualities = expanded.map(({ variants }) => {
-    let best = 0;
-    if (variants.size <= words.size) {
-      for (const [variant, quality] of variants) {
-        if (quality > best && words.has(variant)) best = quality;
-      }
-    } else {
-      for (const word of words) {
-        const quality = variants.get(word);
-        if (quality !== undefined && quality > best) best = quality;
-      }
+/**
+ * How well each search word is found in each product of one index
+ * (0 = not found). Only products that have at least one of the words appear.
+ */
+function wordQualities<T>(expanded: ExpandedToken[], index: Index<T>): Map<number, number[]> {
+  const found = new Map<number, number[]>();
+  const note = (position: number, word: number, quality: number) => {
+    let qualities = found.get(position);
+    if (!qualities) {
+      qualities = new Array<number>(expanded.length).fill(0);
+      found.set(position, qualities);
     }
-    return best;
+    if (quality > qualities[word]!) qualities[word] = quality;
+  };
+  expanded.forEach(({ variants }, word) => {
+    for (const [variant, quality] of variants) {
+      for (const position of index.postings.get(variant) ?? []) note(position, word, quality);
+    }
   });
   // "make up" in the search, "makeup" in the product name.
-  for (let i = 0; i + 1 < expanded.length; i++) {
-    if (qualities[i] === 1 && qualities[i + 1] === 1) continue;
-    if (words.has(expanded[i]!.token + expanded[i + 1]!.token)) {
-      qualities[i] = 1;
-      qualities[i + 1] = 1;
+  for (let word = 0; word + 1 < expanded.length; word++) {
+    const joined = expanded[word]!.token + expanded[word + 1]!.token;
+    for (const position of index.postings.get(joined) ?? []) {
+      note(position, word, 1);
+      note(position, word + 1, 1);
     }
   }
-  return qualities;
+  return found;
 }
+
+/** A matched product: which index it is in, and where. */
+type Hit = { index: number; position: number; score: number };
 
 /**
  * The search as the matched products spell it: each misspelled or half-typed
  * word becomes the product word it matched most often ("garnir" -> "garnier",
  * "effac" -> "effaclar"). Null when every word was already spelled that way.
  */
-function spellingUsed(expanded: ExpandedToken[], matched: Set<string>[]): string | null {
+function spellingUsed<T>(
+  expanded: ExpandedToken[],
+  indexes: Index<T>[],
+  hits: Hit[],
+): string | null {
+  const matched = indexes.map(() => new Set<number>());
+  for (const hit of hits) matched[hit.index]!.add(hit.position);
+  /** How many matched products have this word. */
+  const uses = (word: string) =>
+    indexes.reduce(
+      (n, index, i) =>
+        n + (index.postings.get(word) ?? []).filter((p) => matched[i]!.has(p)).length,
+      0,
+    );
+
   let changed = false;
   const words = expanded.map(({ token, variants, unknown }) => {
-    if (!unknown || variants.size === 1 || matched.some((words) => words.has(token))) return token;
+    if (!unknown || variants.size === 1 || uses(token) > 0) return token;
     let best = token;
     let bestCount = 0;
     for (const variant of variants.keys()) {
       if (variant === token) continue;
-      const count = matched.reduce((n, words) => n + (words.has(variant) ? 1 : 0), 0);
+      const count = uses(variant);
       if (count > bestCount) {
         best = variant;
         bestCount = count;
@@ -214,16 +248,13 @@ export type MatchResult<T> = {
 };
 
 /**
- * Pick the products that best fit the search.
+ * Pick the products that best fit the search, from one or more indexes.
  *  - Products containing every search word (allowing typos and partial words) win.
  *  - If there are none, the products containing the most search words are
  *    returned instead (at least half of the words), flagged as approximate.
  */
-export function findBestMatches<T>(
-  query: string,
-  entries: Entry<T>[],
-  vocabularies: Vocabulary[],
-): MatchResult<T> {
+export function findBestMatches<T>(query: string, indexes: Index<T>[]): MatchResult<T> {
+  const vocabularies = indexes.map((index) => index.vocabulary);
   const expanded = tokens(query).map((t) => expandToken(t, vocabularies));
   const total = expanded.length;
   if (total === 0) return { matches: [], approximate: false, corrected: null };
@@ -231,38 +262,36 @@ export function findBestMatches<T>(
   const minimumFound = Math.max(1, Math.ceil(total / 2));
   let bestFound = total > 1 ? minimumFound : 1;
   let bestScore = 0;
-  let candidates: { entry: Entry<T>; score: number }[] = [];
+  let candidates: Hit[] = [];
 
-  for (const entry of entries) {
-    const qualities = wordQualities(expanded, entry.words);
-    let found = 0;
-    let score = 0;
-    let foundRealWord = false;
-    qualities.forEach((quality, i) => {
-      if (quality === 0) return;
-      found++;
-      score += quality;
-      if (!/^\d/.test(expanded[i]!.token)) foundRealWord = true;
-    });
-    // A product must share an actual word with the search, not just a size.
-    if (found < bestFound || (!foundRealWord && found < total)) continue;
-    if (found > bestFound) {
-      bestFound = found;
-      bestScore = 0;
-      candidates = [];
+  indexes.forEach((index, indexNumber) => {
+    for (const [position, qualities] of wordQualities(expanded, index)) {
+      let found = 0;
+      let score = 0;
+      let foundRealWord = false;
+      qualities.forEach((quality, i) => {
+        if (quality === 0) return;
+        found++;
+        score += quality;
+        if (!/^\d/.test(expanded[i]!.token)) foundRealWord = true;
+      });
+      // A product must share an actual word with the search, not just a size.
+      if (found < bestFound || (!foundRealWord && found < total)) continue;
+      if (found > bestFound) {
+        bestFound = found;
+        bestScore = 0;
+        candidates = [];
+      }
+      score /= total;
+      if (score > bestScore) bestScore = score;
+      candidates.push({ index: indexNumber, position, score });
     }
-    score /= total;
-    if (score > bestScore) bestScore = score;
-    candidates.push({ entry, score });
-  }
+  });
 
-  const kept = candidates.filter((c) => c.score >= bestScore - SCORE_BAND).map((c) => c.entry);
+  const kept = candidates.filter((c) => c.score >= bestScore - SCORE_BAND);
   return {
-    matches: kept.map((entry) => entry.item),
+    matches: kept.map((hit) => indexes[hit.index]!.items[hit.position]!),
     approximate: kept.length > 0 && bestFound < total,
-    corrected: spellingUsed(
-      expanded,
-      kept.map((entry) => entry.words),
-    ),
+    corrected: spellingUsed(expanded, indexes, kept),
   };
 }

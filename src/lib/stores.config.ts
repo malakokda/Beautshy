@@ -3,7 +3,7 @@
  *
  * type:
  *   - "shopify": any store built on Shopify (most Egyptian beauty shops).
- *     Check a site by opening  https://<site>/search/suggest.json?q=test
+ *     Check a site by opening  https://<site>/products.json?limit=1
  *     in your browser. If you see JSON with "products", it works.
  *   - "amazon": Amazon, searched through SerpAPI (needs SERPAPI_KEY in
  *     .env.local; each search uses one SerpAPI credit, reused for 6 hours).
@@ -12,13 +12,12 @@
  *     sitemap:        address of the sitemap (see the store's /robots.txt).
  *     productPattern: what a product page address looks like (a regular expression).
  *
- * url:      the store's home page, without a trailing slash.
- * currency: what the store's prices are in (defaults to "EGP").
+ * url: the store's home page, without a trailing slash.
+ * Every store's prices are in Egyptian pounds (EGP).
  */
 export type StoreConfig = {
   name: string;
   url: string;
-  currency?: string;
 } & ({ type: "shopify" | "amazon" } | { type: "sitemap"; sitemap: string; productPattern: string });
 
 export const STORES: StoreConfig[] = [

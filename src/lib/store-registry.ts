@@ -1,82 +1,57 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { STORES, type StoreConfig } from "./stores.config";
+import { query } from "./db";
 import { takeDailyAllowance } from "./rate-limit";
+import { STORES, type StoreConfig } from "./stores.config";
 import { isPublicHost, siteName, tryGetJson } from "./web";
 
 /**
- * Stores added by pasting a link into the search box. They are searched
- * together with the built-in list in stores.config.ts.
- *
- * They are saved in the database table "added_stores" (see supabase/schema.sql),
- * so they survive restarts on any hosting service. Until that table exists
- * they are saved in data/added-stores.json instead, which only lasts on a
- * computer that keeps its files. Delete a store's row (or entry) to remove it.
+ * Stores added by pasting a link into the search box. They are kept in the
+ * database table "added_stores" and searched together with the built-in list
+ * in stores.config.ts. Delete a store's row to remove it.
  */
-const FILE = path.join(process.cwd(), "data", "added-stores.json");
+
 /** Upper limit on stores added through the search box. */
 const MAX_ADDED_STORES = 40;
 /** New stores accepted per day, so one visitor cannot fill the list. */
 const NEW_STORES_PER_DAY = 5;
+/** How long the list is remembered before the database is asked again. */
+const REMEMBER_MS = 60_000;
+/** Where added stores were saved before the database existed. */
+const OLD_FILE = path.join(process.cwd(), "data", "added-stores.json");
 
-let added: StoreConfig[] | undefined;
-/** Turned off when the database table cannot be used; the file is used instead. */
-let useDatabase = true;
+let added: { stores: StoreConfig[]; loadedAt: number } | undefined;
+let oldFileImported = false;
 
 async function loadAdded(): Promise<StoreConfig[]> {
-  if (added) return added;
-  const fromFile = await readFileStores();
-  try {
-    const { data, error } = await supabaseAdmin.from("added_stores").select("name, url");
-    if (error) throw new Error(error.message);
-    const list: StoreConfig[] = data.map(({ name, url }) => ({ name, type: "shopify", url }));
-    // Move over the stores that were saved in the file before the table existed.
-    const missing = fromFile.filter((f) => !list.some((s) => s.url === f.url));
-    if (missing.length > 0) {
-      const moved = await supabaseAdmin
-        .from("added_stores")
-        .insert(missing.map(({ name, url }) => ({ name, url })));
-      if (moved.error) console.warn("[store-registry] could not move file stores:", moved.error);
-      list.push(...missing);
-    }
-    added = list;
-  } catch (err) {
-    useDatabase = false;
-    console.warn(
-      "[store-registry] the added_stores table is not available, using data/added-stores.json. " +
-        "Run supabase/schema.sql in Supabase to keep added stores when the site is hosted.",
-      err,
-    );
-    added = fromFile;
+  if (added && Date.now() - added.loadedAt < REMEMBER_MS) return added.stores;
+  if (!oldFileImported) {
+    await importOldFile();
+    oldFileImported = true;
   }
-  return added;
+  const rows = await query<{ name: string; url: string }>(
+    `select name, url from added_stores order by created_at`,
+  );
+  const stores = rows.map(({ name, url }): StoreConfig => ({ name, type: "shopify", url }));
+  added = { stores, loadedAt: Date.now() };
+  return stores;
 }
 
-async function readFileStores(): Promise<StoreConfig[]> {
+/** Copy the stores from the old data/added-stores.json into the database, once. */
+async function importOldFile(): Promise<void> {
+  let saved: unknown;
   try {
-    const saved: unknown = JSON.parse(await readFile(FILE, "utf8"));
-    return Array.isArray(saved)
-      ? saved.filter(
-          (s): s is StoreConfig =>
-            typeof s?.name === "string" && typeof s?.url === "string" && s?.type === "shopify",
-        )
-      : [];
+    saved = JSON.parse(await readFile(OLD_FILE, "utf8"));
   } catch {
-    return []; // no file yet
+    return; // no old file
   }
-}
-
-async function saveAdded(store: StoreConfig, all: StoreConfig[]): Promise<void> {
-  if (useDatabase) {
-    const { error } = await supabaseAdmin
-      .from("added_stores")
-      .insert({ name: store.name, url: store.url });
-    if (!error) return;
-    console.warn("[store-registry] could not save to the database, saving to the file:", error);
+  for (const store of Array.isArray(saved) ? saved : []) {
+    if (typeof store?.name !== "string" || typeof store?.url !== "string") continue;
+    await query(`insert into added_stores (url, name) values ($1, $2) on conflict do nothing`, [
+      store.url,
+      store.name,
+    ]);
   }
-  await mkdir(path.dirname(FILE), { recursive: true });
-  await writeFile(FILE, `${JSON.stringify(all, null, 2)}\n`, "utf8");
 }
 
 /** Every store to search: the built-in list plus the ones added through the search box. */
@@ -92,13 +67,13 @@ export type StoreRegistration =
 
 /**
  * Make sure the website behind a link is one of the searched stores. A new
- * website is added when it is a Shopify store with an open product list and
- * prices in Egyptian pounds.
+ * website is added when it is an Egyptian Shopify store with an open product
+ * list and prices in Egyptian pounds.
  */
 export async function registerStoreFromLink(url: URL): Promise<StoreRegistration> {
   const site = siteName(url.hostname);
-  const stores = await getStores();
-  const known = stores.find((s) => siteName(new URL(s.url).hostname) === site);
+  const sameSite = (s: StoreConfig) => siteName(new URL(s.url).hostname) === site;
+  const known = (await getStores()).find(sameSite);
   if (known) return { status: "known", store: known };
 
   const unsupported = (reason: string): StoreRegistration => ({
@@ -129,7 +104,7 @@ export async function registerStoreFromLink(url: URL): Promise<StoreRegistration
         : "it is not an Egyptian store",
     );
   }
-  if (!takeDailyAllowance("added-stores", NEW_STORES_PER_DAY)) {
+  if (!(await takeDailyAllowance("added-stores", NEW_STORES_PER_DAY))) {
     return unsupported(`only ${NEW_STORES_PER_DAY} new stores can be added per day`);
   }
 
@@ -138,12 +113,12 @@ export async function registerStoreFromLink(url: URL): Promise<StoreRegistration
     type: "shopify",
     url: url.origin,
   };
-  const list = await loadAdded();
-  // Another search may have added the same store while this one was checking it.
-  const raced = list.find((s) => siteName(new URL(s.url).hostname) === site);
-  if (raced) return { status: "known", store: raced };
-  list.push(store);
-  await saveAdded(store, list);
+  // If another search added the same store meanwhile, the row already exists.
+  await query(`insert into added_stores (url, name) values ($1, $2) on conflict do nothing`, [
+    store.url,
+    store.name,
+  ]);
+  added = undefined; // read the list again next time
   console.info(`[store-registry] added ${store.name} (${store.url})`);
   return { status: "added", store };
 }

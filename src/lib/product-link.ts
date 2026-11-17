@@ -39,15 +39,8 @@ export type LinkedProduct = {
  * product data, structured product info, share title, page title) and falls
  * back to the words in the link itself.
  */
-export async function productFromLink(link: string): Promise<LinkedProduct> {
-  let url: URL;
-  try {
-    url = new URL(link.trim());
-  } catch {
-    return { names: [link.trim()] };
-  }
+export async function productFromLink(url: URL): Promise<LinkedProduct> {
   const linkWords = nameFromUrlWords(url);
-  if (url.protocol !== "http:" && url.protocol !== "https:") return { names: [linkWords] };
 
   let name: string | undefined;
   let offer: Offer | undefined;

@@ -1,0 +1,71 @@
+/**
+ * The database connection. Server-only.
+ *
+ * - With DATABASE_URL set (the Postgres address of your Supabase project) every
+ *   server shares that one database. This is what a hosted site must use.
+ * - Without it, a small Postgres database stored in data/pglite on this
+ *   computer is used, so the site can be developed and tested with no account.
+ *
+ * Both understand the same SQL, so nothing else in the code knows the difference.
+ */
+import path from "node:path";
+import { SCHEMA } from "./schema";
+
+type Runner = {
+  query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }>;
+  exec: (sql: string) => Promise<unknown>;
+};
+
+// Kept on globalThis so a code reload during development reuses the open
+// database instead of opening the same local files twice.
+const shared = globalThis as { __glowsouqDb?: Promise<Runner> | undefined };
+
+async function connect(): Promise<Runner> {
+  const url = process.env["DATABASE_URL"];
+  let runner: Runner;
+  if (url) {
+    const { default: pg } = await import("pg");
+    const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+    const pool = new pg.Pool({
+      connectionString: url,
+      max: 10,
+      // Hosted Postgres requires an encrypted connection.
+      ...(local ? {} : { ssl: { rejectUnauthorized: false } }),
+    });
+    pool.on("error", (err) => console.error("[db] connection error:", err));
+    runner = {
+      query: (sql, params) => pool.query(sql, params),
+      exec: (sql) => pool.query(sql),
+    };
+  } else {
+    const { PGlite } = await import("@electric-sql/pglite");
+    // Tests get a fresh database in memory; otherwise it is kept in data/pglite.
+    const folder = process.env["VITEST"] ? undefined : path.join(process.cwd(), "data", "pglite");
+    if (folder) {
+      console.warn(
+        "[db] DATABASE_URL is not set: using the local database in data/pglite. " +
+          "A hosted site must set DATABASE_URL, or its data is lost on every restart.",
+      );
+    }
+    const db = new PGlite(folder);
+    runner = {
+      query: (sql, params) => db.query(sql, params),
+      exec: (sql) => db.exec(sql),
+    };
+  }
+  await runner.exec(SCHEMA);
+  return runner;
+}
+
+/** Run one SQL statement and return its rows. Values go in `params` ($1, $2, ...). */
+export async function query<T = Record<string, unknown>>(
+  sql: string,
+  params: unknown[] = [],
+): Promise<T[]> {
+  shared.__glowsouqDb ??= connect().catch((err: unknown) => {
+    shared.__glowsouqDb = undefined; // try again on the next request
+    throw err;
+  });
+  const runner = await shared.__glowsouqDb;
+  return (await runner.query(sql, params)).rows as T[];
+}

@@ -1,3 +1,4 @@
+import { query } from "./db";
 import type { CatalogItem, Offer } from "./price-results";
 import type { StoreConfig } from "./stores.config";
 import { CACHE_TTL_MS, findJsonLdProduct, USER_AGENT, type JsonLd } from "./web";
@@ -9,7 +10,8 @@ import { CACHE_TTL_MS, findJsonLdProduct, USER_AGENT, type JsonLd } from "./web"
  * product's name ("/en/p/maybelline-fit-me-foundation-123.html"). So:
  *   1. the sitemap is downloaded (and reused for 6 hours) to learn the names,
  *   2. the search picks the product pages whose names fit,
- *   3. only those few pages are opened to read the real name and price.
+ *   3. only those few pages are opened to read the real name and price, and
+ *      what they say is saved in the database for 6 hours, for every server.
  */
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -44,7 +46,7 @@ export async function downloadSitemapCatalog(store: SitemapStore): Promise<Catal
         store: store.name,
         name,
         price: Number.NaN, // not known until the page is opened
-        currency: store.currency ?? "EGP",
+        currency: "EGP",
         url,
         matchText: name,
       });
@@ -75,7 +77,13 @@ function nameFromAddress(url: string): string {
     .join(" ");
 }
 
+/** Pages already read. Memory first; behind it, the database's page_prices table. */
 const pageCache = new Map<string, { loadedAt: number; offer: Offer | null }>();
+
+function remembered(url: string): { offer: Offer | null } | undefined {
+  const cached = pageCache.get(url);
+  return cached && Date.now() - cached.loadedAt < CACHE_TTL_MS ? cached : undefined;
+}
 
 /**
  * Open the product pages of the given matches and return them with their real
@@ -90,6 +98,7 @@ export async function priceSitemapOffers(matches: Offer[]): Promise<Offer[]> {
     perStore.set(match.store, list);
   }
   const chosen = [...perStore.values()].flat();
+  await recallFromDatabase(chosen.filter((match) => !remembered(match.url)));
 
   const priced: Offer[] = [];
   for (let i = 0; i < chosen.length; i += PAGE_CONCURRENCY) {
@@ -99,22 +108,72 @@ export async function priceSitemapOffers(matches: Offer[]): Promise<Offer[]> {
   return priced;
 }
 
+type PagePriceRow = {
+  url: string;
+  name: string | null;
+  price: number | null;
+  currency: string | null;
+  image: string | null;
+  age_ms: number;
+};
+
+/** Fill the memory with what any server has read from these pages in the last 6 hours. */
+async function recallFromDatabase(matches: Offer[]): Promise<void> {
+  if (matches.length === 0) return;
+  const rows = await query<PagePriceRow>(
+    `select url, name, price, currency, image,
+            (extract(epoch from now() - read_at) * 1000)::float8 as age_ms
+       from page_prices
+      where url in (select jsonb_array_elements_text($1::jsonb))
+        and read_at > now() - make_interval(secs => $2::float8)`,
+    [JSON.stringify(matches.map((m) => m.url)), CACHE_TTL_MS / 1000],
+  );
+  const byUrl = new Map(matches.map((match) => [match.url, match]));
+  for (const row of rows) {
+    const match = byUrl.get(row.url);
+    if (!match) continue;
+    const offer: Offer | null =
+      row.price === null
+        ? null
+        : {
+            store: match.store,
+            name: row.name ?? match.name,
+            price: row.price,
+            currency: row.currency ?? match.currency,
+            url: row.url,
+            ...(row.image ? { image: row.image } : {}),
+          };
+    pageCache.set(row.url, { loadedAt: Date.now() - row.age_ms, offer });
+  }
+}
+
+/** Keep what a page said (or that it has no price), in memory and in the database. */
+async function remember(url: string, offer: Offer | null): Promise<void> {
+  pageCache.set(url, { loadedAt: Date.now(), offer });
+  await query(
+    `insert into page_prices (url, name, price, currency, image) values ($1, $2, $3, $4, $5)
+     on conflict (url) do update set name = excluded.name, price = excluded.price,
+       currency = excluded.currency, image = excluded.image, read_at = now()`,
+    [url, offer?.name ?? null, offer?.price ?? null, offer?.currency ?? null, offer?.image ?? null],
+  ).catch((err: unknown) => console.warn("[sitemap-store] could not save a page price:", err));
+}
+
 async function readProductPage(match: Offer): Promise<Offer | null> {
-  const cached = pageCache.get(match.url);
-  if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) return cached.offer;
+  const cached = remembered(match.url);
+  if (cached) return cached.offer;
   let offer: Offer | null = null;
   try {
     offer = offerFromPage(await fetchText(match.url), match);
   } catch (err) {
     // A page the sitemap still lists but the store has removed: remember that.
     if (err instanceof Error && err.message === "HTTP 404") {
-      pageCache.set(match.url, { loadedAt: Date.now(), offer: null });
+      await remember(match.url, null);
       return null;
     }
     console.warn(`[sitemap-store] could not read ${match.url}:`, err);
     return null; // not remembered: try again on the next search
   }
-  pageCache.set(match.url, { loadedAt: Date.now(), offer });
+  await remember(match.url, offer);
   return offer;
 }
 

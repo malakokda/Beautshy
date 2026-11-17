@@ -73,12 +73,12 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Beauty Deal Finder" },
+      { title: "GlowSouq" },
       {
         name: "description",
         content: "Find the 10 cheapest prices for cosmetics products online.",
       },
-      { property: "og:title", content: "Beauty Deal Finder" },
+      { property: "og:title", content: "GlowSouq" },
       {
         property: "og:description",
         content: "Find the 10 cheapest prices for cosmetics products online.",
@@ -91,7 +91,6 @@ export const Route = createRootRoute({
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
   shellComponent: RootShell,

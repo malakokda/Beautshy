@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findBestMatches, typoDistance, wordSet, type Vocabulary } from "./fuzzy-match";
+import { buildIndex, findBestMatches, typoDistance } from "./fuzzy-match";
 
 const PRODUCTS = [
   "Garnier Micellar Water 400ml",
@@ -17,10 +17,10 @@ const PRODUCTS = [
   ...Array.from({ length: 5 }, (_, i) => `CeraVe Lotion Type ${i}`),
 ];
 
+const index = buildIndex(PRODUCTS.map((name) => ({ item: name, text: name })));
+
 function search(query: string) {
-  const vocabulary: Vocabulary = new Map();
-  const entries = PRODUCTS.map((name) => ({ item: name, words: wordSet(name, vocabulary) }));
-  return findBestMatches(query, entries, [vocabulary]);
+  return findBestMatches(query, [index]);
 }
 
 describe("typoDistance", () => {
@@ -70,6 +70,17 @@ describe("findBestMatches", () => {
     const res = search("cerave moisturizing cream 999g");
     expect(res.matches).toEqual(["CeraVe Moisturizing Cream 340g"]);
     expect(res.approximate).toBe(true);
+  });
+
+  it("searches several indexes as one", () => {
+    const first = buildIndex(PRODUCTS.slice(0, 2).map((name) => ({ item: name, text: name })));
+    const rest = buildIndex(PRODUCTS.slice(2).map((name) => ({ item: name, text: name })));
+    const split = findBestMatches("garnir micelar watr", [first, rest]);
+    expect(split.matches).toEqual(search("garnir micelar watr").matches);
+    expect(split.corrected).toBe("garnier micellar water");
+    expect(findBestMatches("cerav clean", [first, rest]).matches).toEqual(
+      search("cerav clean").matches,
+    );
   });
 
   it("returns nothing for an unrelated search", () => {

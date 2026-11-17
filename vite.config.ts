@@ -32,7 +32,9 @@ export default defineConfig(({ command }) => ({
       server: { entry: "server" },
     }),
     // Nitro builds the deployable server (Node.js by default; set NITRO_PRESET to change it).
-    ...(command === "build" ? [nitro()] : []),
+    // The local database (PGlite) loads data files that sit next to its code,
+    // so it is copied whole into the build instead of being merged into it.
+    ...(command === "build" ? [nitro({ traceDeps: ["@electric-sql/pglite*"] })] : []),
     viteReact(),
   ],
 }));

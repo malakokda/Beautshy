@@ -15,9 +15,9 @@ export type CatalogItem = Offer & { matchText: string };
 const TOP_N = 10;
 
 /** Sort offers cheapest-first and keep only the top TOP_N. */
-export function topCheapest(offers: Offer[], max = TOP_N): Offer[] {
+export function topCheapest(offers: Offer[]): Offer[] {
   return [...offers]
     .filter((o) => Number.isFinite(o.price) && o.price >= 0)
     .sort((a, b) => a.price - b.price)
-    .slice(0, max);
+    .slice(0, TOP_N);
 }
