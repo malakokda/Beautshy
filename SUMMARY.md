@@ -100,8 +100,12 @@ Reading every store takes 10 to 15 seconds, so it is not done during a search.
 
 ## 6. Accounts and plans
 
-- **Sign-up and sign-in** use email and password, handled by Supabase Auth. New accounts
-  confirm their email through a link.
+- **Sign-up and sign-in** use email and password, handled by Supabase Auth.
+- **Only Gmail, Yahoo, iCloud and Hotmail addresses** can sign up (the list is in
+  `src/lib/email-check.ts`). Common typos such as "gmial.com" or "gmail.con" get a
+  "Did you mean …?" suggestion.
+- **New accounts confirm their email with a code** that Supabase emails them, sent through
+  the owner's Gmail.
 - **Staying signed in** uses a signed cookie that lasts 30 days.
 - **Free plan:** 3 searches. **Premium:** unlimited, 99 EGP.
 - **Upgrading is manual.** The visitor clicks "upgrade", pays the owner directly, and the

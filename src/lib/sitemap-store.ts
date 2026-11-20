@@ -1,7 +1,7 @@
 import { query } from "./db";
 import type { CatalogItem, Offer } from "./price-results";
 import type { StoreConfig } from "./stores.config";
-import { CACHE_TTL_MS, findJsonLdProduct, USER_AGENT, type JsonLd } from "./web";
+import { CACHE_TTL_MS, download, findJsonLdProduct, type JsonLd } from "./web";
 
 /**
  * Stores that are not on Shopify but publish a sitemap (Mazaya, Faces).
@@ -212,40 +212,13 @@ function offerFromPage(html: string, match: Offer): Offer | null {
   };
 }
 
-/**
- * Download a page, keeping the cookies the site sets while it redirects
- * (Faces answers the first request with a cookie and a redirect to itself).
- */
+/** Download a sitemap or product page from the store's own website. */
 async function fetchText(address: string): Promise<string> {
-  const host = new URL(address).hostname;
-  const cookies = new Map<string, string>();
-  let current = address;
-  for (let hop = 0; hop < 5; hop++) {
-    const res = await fetch(current, {
-      headers: {
-        "user-agent": USER_AGENT,
-        accept: "text/html,application/xml,text/xml",
-        ...(cookies.size > 0
-          ? { cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; ") }
-          : {}),
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    for (const cookie of res.headers.getSetCookie()) {
-      const pair = cookie.split(";")[0]!;
-      const equals = pair.indexOf("=");
-      if (equals > 0) cookies.set(pair.slice(0, equals).trim(), pair.slice(equals + 1).trim());
-    }
-    if (res.status >= 300 && res.status < 400) {
-      await res.body?.cancel();
-      const next = new URL(res.headers.get("location") ?? "", current);
-      if (next.hostname !== host) throw new Error(`redirected away to ${next.hostname}`);
-      current = next.href;
-      continue;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.text();
-  }
-  throw new Error("too many redirects");
+  const res = await download(address, {
+    accept: "text/html,application/xml,text/xml",
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    sameSiteOnly: true,
+  });
+  if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+  return res.body;
 }

@@ -30,7 +30,7 @@ async function connect(): Promise<Runner> {
       connectionString: url,
       max: 10,
       // Hosted Postgres requires an encrypted connection.
-      ...(local ? {} : { ssl: { rejectUnauthorized: false } }),
+      ...(local ? {} : { ssl: await sslOptions() }),
     });
     pool.on("error", (err) => console.error("[db] connection error:", err));
     runner = {
@@ -55,6 +55,29 @@ async function connect(): Promise<Runner> {
   }
   await runner.exec(SCHEMA);
   return runner;
+}
+
+/** Supabase's own certificate authority (public, not a secret). */
+const CA_FILE = path.join(process.cwd(), "certs", "supabase-ca.crt");
+
+/**
+ * With Supabase's certificate in certs/supabase-ca.crt, the database's identity
+ * is checked, so nobody between this server and Supabase can pretend to be it.
+ * Without the file the connection is still encrypted but not checked, and a
+ * warning is logged. Get the file from the Supabase dashboard: Database
+ * Settings > SSL Configuration > Download certificate.
+ */
+async function sslOptions(): Promise<{ rejectUnauthorized: boolean; ca?: string }> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return { rejectUnauthorized: true, ca: await readFile(CA_FILE, "utf8") };
+  } catch {
+    console.warn(
+      "[db] certs/supabase-ca.crt is missing: the database connection is encrypted " +
+        "but the database's certificate is not checked.",
+    );
+    return { rejectUnauthorized: false };
+  }
 }
 
 /** Run one SQL statement and return its rows. Values go in `params` ($1, $2, ...). */

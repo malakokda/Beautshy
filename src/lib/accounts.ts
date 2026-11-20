@@ -4,9 +4,16 @@
  * search count are in the "profiles" table (see schema.ts).
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { deleteCookie, getCookie, setCookie } from "@tanstack/react-start/server";
+import {
+  deleteCookie,
+  getCookie,
+  getRequestProtocol,
+  setCookie,
+} from "@tanstack/react-start/server";
 import { createSupabaseAuthClient } from "@/integrations/supabase/client.server";
 import { query } from "./db";
+import { visitorAddress } from "./rate-limit";
+import { isAllowedEmail, NOT_ALLOWED_MESSAGE } from "./email-check";
 import { FREE_SEARCHES, type Account, type AccountRow } from "./plans";
 
 export type SessionUser = { id: string; email: string };
@@ -52,7 +59,11 @@ function startSession(user: SessionUser): void {
   setCookie(COOKIE, sessionToken(user, Date.now() + maxAge * 1000), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env["NODE_ENV"] === "production",
+    // Only sent over encrypted connections, except on your own computer (http://localhost).
+    // NODE_ENV is not set on Render, so the connection itself decides.
+    secure:
+      process.env["NODE_ENV"] === "production" ||
+      getRequestProtocol({ xForwardedProto: true }) === "https",
     path: "/",
     maxAge,
   });
@@ -71,8 +82,8 @@ export function currentUser(): SessionUser | null {
 
 export type AuthResult =
   | { ok: true; user: SessionUser }
-  /** The account was created but the email must be confirmed first. */
-  | { ok: true; user?: undefined; message: string }
+  /** The email must be confirmed first, with the code that was emailed. */
+  | { ok: true; user?: undefined; needsCode: true; message: string }
   | { ok: false; error: string };
 
 function friendly(message: string): string {
@@ -86,38 +97,89 @@ function friendly(message: string): string {
   if (/already registered/i.test(message)) {
     return "An account with this email already exists. Sign in instead.";
   }
+  if (/email rate limit/i.test(message)) {
+    return "We can't send more emails right now. Please try again in an hour.";
+  }
   if (/rate limit/i.test(message)) return "Too many attempts. Please wait a while and try again.";
+  if (/expired|invalid.*(otp|token)|otp.*invalid/i.test(message)) {
+    return "That code is wrong or has expired. Check the latest email, or ask for a new code.";
+  }
   return message;
 }
 
+function codeSent(email: string): AuthResult {
+  return {
+    ok: true,
+    needsCode: true,
+    message: `We emailed a code to ${email}. Enter it below to confirm your email.`,
+  };
+}
+
 export async function signUp(email: string, password: string): Promise<AuthResult> {
+  // Checked here as well as on the page, so it cannot be skipped.
+  if (!isAllowedEmail(email)) return { ok: false, error: NOT_ALLOWED_MESSAGE };
   // A separate client, so the shared one never switches to this person's identity.
-  const { data, error } = await createSupabaseAuthClient().signUp({ email, password });
+  const { data, error } = await createSupabaseAuthClient(visitorAddress()).signUp({
+    email,
+    password,
+  });
   if (error) return { ok: false, error: friendly(error.message) };
   if (!data.user?.email || data.user.identities?.length === 0) {
     return { ok: false, error: "An account with this email already exists. Sign in instead." };
   }
-  if (!data.session) {
-    return {
-      ok: true,
-      message: `We sent a confirmation link to ${email}. Open it, then sign in here.`,
-    };
-  }
+  if (!data.session) return codeSent(email);
   const user = { id: data.user.id, email: data.user.email };
   startSession(user);
   return { ok: true, user };
 }
 
 export async function signIn(email: string, password: string): Promise<AuthResult> {
-  const { data, error } = await createSupabaseAuthClient().signInWithPassword({
+  const { data, error } = await createSupabaseAuthClient(visitorAddress()).signInWithPassword({
     email,
     password,
   });
-  if (error) return { ok: false, error: friendly(error.message) };
+  if (error) {
+    // Signed up but never entered the code: send a fresh one and ask for it.
+    if (/email not confirmed/i.test(error.message)) {
+      const resent = await resendCode(email);
+      if (resent.ok) return resent;
+      // Could not send another one yet: the earlier code still works.
+      return {
+        ok: true,
+        needsCode: true,
+        message: `Your email isn't confirmed yet. Enter the code we emailed to ${email}.`,
+      };
+    }
+    return { ok: false, error: friendly(error.message) };
+  }
   if (!data.user?.email) return { ok: false, error: "Wrong email or password." };
   const user = { id: data.user.id, email: data.user.email };
   startSession(user);
   return { ok: true, user };
+}
+
+/** Confirm the email with the code from the sign-up email, then sign the person in. */
+export async function verifyCode(email: string, code: string): Promise<AuthResult> {
+  const { data, error } = await createSupabaseAuthClient(visitorAddress()).verifyOtp({
+    email,
+    token: code,
+    type: "email",
+  });
+  if (error) return { ok: false, error: friendly(error.message) };
+  if (!data.user?.email) return { ok: false, error: friendly("invalid otp") };
+  const user = { id: data.user.id, email: data.user.email };
+  startSession(user);
+  return { ok: true, user };
+}
+
+/** Email a new sign-up code (the old one stops working). */
+export async function resendCode(email: string): Promise<AuthResult> {
+  const { error } = await createSupabaseAuthClient(visitorAddress()).resend({
+    type: "signup",
+    email,
+  });
+  if (error) return { ok: false, error: friendly(error.message) };
+  return codeSent(email);
 }
 
 /* ---------- Plans and the free-search allowance ---------- */
@@ -131,8 +193,16 @@ export function isAdmin(email: string): boolean {
     .includes(email.toLowerCase());
 }
 
+/**
+ * SQL that is true while an account is premium: the plan says premium and,
+ * for a paid month, its end date has not passed. When it passes the account is
+ * free again, with no job needed to switch it back.
+ */
+const PREMIUM_NOW = `(plan = 'premium' and (premium_until is null or premium_until > now()))`;
+
 type Profile = {
-  plan: string;
+  premium: boolean;
+  premium_until: string | null;
   searches_used: number;
   upgrade_requested_at: unknown;
 };
@@ -142,7 +212,8 @@ async function loadProfile(user: SessionUser): Promise<Profile> {
   const rows = await query<Profile>(
     `insert into profiles (user_id, email) values ($1, $2)
      on conflict (user_id) do update set email = excluded.email
-     returning plan, searches_used, upgrade_requested_at`,
+     returning ${PREMIUM_NOW} as premium, to_json(premium_until) #>> '{}' as premium_until,
+               searches_used, upgrade_requested_at`,
     [user.id, user.email],
   );
   return rows[0]!;
@@ -151,8 +222,9 @@ async function loadProfile(user: SessionUser): Promise<Profile> {
 export async function getAccount(user: SessionUser): Promise<Account> {
   const profile = await loadProfile(user);
   const admin = isAdmin(user.email);
-  const plan = profile.plan === "premium" ? "premium" : "free";
+  const plan = profile.premium ? "premium" : "free";
   const unlimited = admin || plan === "premium";
+  const { cardPaymentsEnabled } = await import("./payments");
   return {
     email: user.email,
     plan,
@@ -160,6 +232,8 @@ export async function getAccount(user: SessionUser): Promise<Account> {
     searchesLeft: unlimited ? null : Math.max(0, FREE_SEARCHES - profile.searches_used),
     isAdmin: admin,
     upgradeRequested: profile.upgrade_requested_at !== null,
+    premiumUntil: profile.premium ? profile.premium_until : null,
+    cardPayments: cardPaymentsEnabled(),
   };
 }
 
@@ -176,7 +250,7 @@ export async function reserveSearch(
   await loadProfile(user);
   const counted = await query(
     `update profiles set searches_used = searches_used + 1
-      where user_id = $1 and (plan = 'premium' or $2::boolean or searches_used < $3::int)
+      where user_id = $1 and (${PREMIUM_NOW} or $2::boolean or searches_used < $3::int)
       returning user_id`,
     [user.id, isAdmin(user.email), FREE_SEARCHES],
   );
@@ -205,7 +279,8 @@ export async function requestUpgrade(user: SessionUser): Promise<void> {
 type AccountRecord = {
   user_id: string;
   email: string;
-  plan: string;
+  premium: boolean;
+  premium_until: string | null;
   searches_used: number;
   requested_at: string | null;
   created_at: string;
@@ -214,8 +289,9 @@ type AccountRecord = {
 /** Every account, with the people waiting for an upgrade first. */
 export async function listAccounts(): Promise<AccountRow[]> {
   const rows = await query<AccountRecord>(
-    `select user_id, email, plan, searches_used,
-            upgrade_requested_at::text as requested_at, created_at::text as created_at
+    `select user_id, email, ${PREMIUM_NOW} as premium, to_json(premium_until) #>> '{}' as premium_until,
+            searches_used, upgrade_requested_at::text as requested_at,
+            created_at::text as created_at
        from profiles
       order by upgrade_requested_at desc nulls last, created_at desc
       limit 500`,
@@ -223,17 +299,22 @@ export async function listAccounts(): Promise<AccountRow[]> {
   return rows.map((row) => ({
     userId: row.user_id,
     email: row.email,
-    plan: row.plan === "premium" ? "premium" : "free",
+    plan: row.premium ? "premium" : "free",
     searchesUsed: row.searches_used,
     upgradeRequestedAt: row.requested_at,
+    premiumUntil: row.premium ? row.premium_until : null,
     createdAt: row.created_at,
   }));
 }
 
-/** Switch an account between free and premium (after the owner received payment). */
+/**
+ * Switch an account between free and premium by hand (e.g. after a payment
+ * made outside the site). Premium given by hand does not end by itself.
+ */
 export async function setPlan(userId: string, plan: "free" | "premium"): Promise<void> {
-  await query(`update profiles set plan = $2, upgrade_requested_at = null where user_id = $1`, [
-    userId,
-    plan,
-  ]);
+  await query(
+    `update profiles set plan = $2, premium_until = null, upgrade_requested_at = null
+      where user_id = $1`,
+    [userId, plan],
+  );
 }

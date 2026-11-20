@@ -9,6 +9,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // The first test in a file also starts the in-memory database, which can take a few seconds.
+    testTimeout: 20_000,
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },

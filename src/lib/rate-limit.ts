@@ -1,27 +1,47 @@
 /** Limits that keep a public site from being abused. Server-only. */
+import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
 import { query } from "./db";
 
 /** Searches (or sign-in attempts) one visitor may make per minute. */
 const ACTIONS_PER_MINUTE = 15;
 const MINUTE_MS = 60_000;
+/** Kept short of memory: past this many keys, quiet ones are forgotten. */
+const MAX_KEYS = 20_000;
 
 const recentActions = new Map<string, number[]>();
 
 /**
- * True if this visitor may act now; false if they are going too fast.
- * This is counted in each server's own memory: it stops a burst from one
- * visitor, and with several servers the real limit is this number per server.
+ * The internet address of the person making this request.
+ *
+ * Not the X-Forwarded-For header: anyone can send that with any value, and
+ * the host only adds to it, so it would let one person pretend to be many
+ * (this was tested on the live site). The site is behind Cloudflare, which
+ * sets CF-Connecting-IP itself. Without Cloudflare (on your own computer) the
+ * address of the connection is used.
  */
-export function allowAction(visitor: string): boolean {
+export function visitorAddress(): string {
+  return getRequestHeader("cf-connecting-ip")?.trim() || getRequestIP() || "unknown";
+}
+
+/**
+ * True if `key` may act now; false if it has acted `limit` times in the last
+ * `windowMs`. Counted in this server's memory: it stops bursts, and with
+ * several servers the real limit is this number per server.
+ */
+export function allowAction(
+  key: string,
+  limit = ACTIONS_PER_MINUTE,
+  windowMs = MINUTE_MS,
+): boolean {
   const now = Date.now();
-  const times = (recentActions.get(visitor) ?? []).filter((t) => now - t < MINUTE_MS);
-  const allowed = times.length < ACTIONS_PER_MINUTE;
+  const times = (recentActions.get(key) ?? []).filter((t) => now - t < windowMs);
+  const allowed = times.length < limit;
   if (allowed) times.push(now);
-  recentActions.set(visitor, times);
-  // Forget visitors who have been quiet, so the list cannot grow forever.
-  if (recentActions.size > 5_000) {
-    for (const [key, seen] of recentActions) {
-      if (seen.every((t) => now - t >= MINUTE_MS)) recentActions.delete(key);
+  recentActions.set(key, times);
+  // Forget keys that have been quiet, so the list cannot grow forever.
+  if (recentActions.size > MAX_KEYS) {
+    for (const [k, seen] of recentActions) {
+      if (seen.every((t) => now - t >= 15 * MINUTE_MS)) recentActions.delete(k);
     }
   }
   return allowed;

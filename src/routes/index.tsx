@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { AccountBar, AdminPanel, AuthCard, UpgradeCard } from "@/components/account";
+import { AccountBar, AdminPanel, AuthCard, UpgradeCard, UpgradeDialog } from "@/components/account";
 import { getMyAccount } from "@/lib/account.functions";
 import type { Account } from "@/lib/plans";
 import { listStores, searchPrices } from "@/lib/search.functions";
@@ -90,6 +90,35 @@ function Index() {
   }, [refreshAccount]);
   /** True when a free account has no searches left. */
   const outOfSearches = account?.searchesLeft === 0;
+  /** The upgrade pop-up opens when the searches run out, until "Not now" is clicked. */
+  const [upgradeDismissed, setUpgradeDismissed] = useState(false);
+
+  // Back from Paymob's payment page. The address Paymob sends people back to
+  // proves nothing by itself; premium is switched on only by Paymob's signed
+  // message to the server. So the page just checks the account until it is premium.
+  const [payment, setPayment] = useState<"checking" | "done" | "waiting">();
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("payment") !== "return") return;
+    url.search = "";
+    window.history.replaceState(null, "", url.pathname + url.hash);
+    setPayment("checking");
+    let tries = 0;
+    let stopped = false;
+    const check = async () => {
+      if (stopped) return;
+      const loaded = await getMyAccountFn().catch(() => null);
+      if (stopped) return;
+      if (loaded) setAccount(loaded);
+      if (loaded?.plan === "premium") return setPayment("done");
+      if (++tries >= 15) return setPayment("waiting");
+      setTimeout(() => void check(), 2_000);
+    };
+    void check();
+    return () => {
+      stopped = true;
+    };
+  }, [getMyAccountFn]);
 
   const runSearch = useCallback(
     async (rawQuery: string) => {
@@ -163,12 +192,25 @@ function Index() {
               <AuthCard onSignedIn={setAccount} />
             </>
           )}
+          {payment && (
+            <p
+              role="status"
+              className="mb-4 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-semibold"
+            >
+              {payment === "checking" && "Checking your payment…"}
+              {payment === "done" &&
+                "Payment received. You're on Premium: search as much as you like!"}
+              {payment === "waiting" &&
+                "We haven't received the payment confirmation yet. If you paid, refresh the page in a minute. If the payment didn't go through, you can try again."}
+            </p>
+          )}
           {account && (
             <>
               <AccountBar
                 account={account}
                 onSignedOut={() => {
                   setAccount(null);
+                  setUpgradeDismissed(false);
                   setSearch({ phase: "idle", query: "", results: [] });
                 }}
               />
@@ -263,6 +305,14 @@ function Index() {
         )}
 
         {account?.isAdmin && <AdminPanel />}
+        {account && (
+          <UpgradeDialog
+            account={account}
+            open={outOfSearches && !upgradeDismissed && search.phase !== "loading"}
+            onClose={() => setUpgradeDismissed(true)}
+            onChanged={setAccount}
+          />
+        )}
       </main>
 
       <footer className="border-t border-border bg-secondary/40 py-8 text-center text-xs text-muted-foreground">

@@ -38,8 +38,7 @@ export const searchPrices = createServerFn({ method: "POST" })
   .inputValidator((data) => searchInput.parse(data))
   .handler(async ({ data }): Promise<SearchResponse> => {
     // Server-only modules are loaded here so they never reach the browser.
-    const [{ getRequestIP }, { allowAction }, accounts, { runSearch }] = await Promise.all([
-      import("@tanstack/react-start/server"),
+    const [{ allowAction, visitorAddress }, accounts, { runSearch }] = await Promise.all([
       import("./rate-limit"),
       import("./accounts"),
       import("./search"),
@@ -52,7 +51,7 @@ export const searchPrices = createServerFn({ method: "POST" })
     });
 
     // Stop one visitor from flooding the stores with searches.
-    if (!allowAction(getRequestIP({ xForwardedFor: true }) ?? "unknown")) {
+    if (!allowAction(visitorAddress())) {
       return refuse("Too many searches at once. Please wait a minute and try again.");
     }
 

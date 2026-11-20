@@ -2,9 +2,10 @@
  * The database tables. This runs automatically when the server first connects,
  * and is safe to run again: it only creates what is missing.
  *
- * Row level security is switched on for every table with no rules, which means
- * only the server can read or write them (Supabase would otherwise expose
- * tables in "public" to anyone holding the project's public key).
+ * Row level security is switched on for every table with no rules, and the
+ * public web roles' permissions are removed, which means only the server can
+ * read or write them (Supabase would otherwise expose tables in "public" to
+ * anyone holding the project's public key).
  */
 export const SCHEMA = `
 begin;
@@ -20,6 +21,22 @@ create table if not exists profiles (
   searches_used integer not null default 0,
   upgrade_requested_at timestamptz,
   created_at timestamptz not null default now()
+);
+
+-- When a paid premium plan ends (null: it does not end, e.g. set by the owner).
+alter table profiles add column if not exists premium_until timestamptz;
+
+-- Card payments through Paymob. Card details are never stored: Paymob keeps them.
+create table if not exists payments (
+  id uuid primary key,
+  user_id uuid not null,
+  amount_cents integer not null,
+  currency text not null,
+  status text not null default 'pending' check (status in ('pending', 'paid', 'failed')),
+  paymob_order_id bigint unique,
+  paymob_transaction_id bigint unique,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
 );
 
 -- Stores added by pasting a link into the search box.
@@ -85,5 +102,25 @@ alter table store_refresh enable row level security;
 alter table page_prices enable row level security;
 alter table amazon_cache enable row level security;
 alter table daily_counters enable row level security;
+alter table payments enable row level security;
+
+-- Second lock on the same door: Supabase gives its public web roles (anon,
+-- authenticated) full permissions on new tables, and only row level security
+-- stood in their way. Take the permissions away too, for these tables and any
+-- created later, so one mistaken rule can never expose them. The site's
+-- server logs in as the database owner and is not affected. (Skipped on the
+-- local database, which has no such roles.)
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon')
+     and exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on table profiles, added_stores, products, store_refresh, page_prices,
+      amazon_cache, daily_counters, payments from anon, authenticated;
+    revoke all on sequence products_id_seq from anon, authenticated;
+    alter default privileges in schema public revoke all on tables from anon, authenticated;
+    alter default privileges in schema public revoke all on sequences from anon, authenticated;
+  end if;
+end
+$$;
 commit;
 `;

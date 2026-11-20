@@ -44,18 +44,65 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+/**
+ * Instructions to the browser that close common attacks:
+ * - Content-Security-Policy: only this site's own scripts run, nothing can be
+ *   loaded from or sent to other sites (except store images), and no other site
+ *   may show this one in a frame (clickjacking). Left out during development,
+ *   where the live-reload tool needs more freedom.
+ * - Strict-Transport-Security: browsers always use https for this site.
+ * - nosniff, Referrer-Policy, Permissions-Policy: smaller leaks and abuses.
+ *
+ * Scripts need 'unsafe-inline' because the framework writes the page's
+ * starting data into the HTML as a small inline script.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' https: data:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  if (import.meta.env.PROD) headers.set("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      // Paymob's message about a card payment (checked by its signature in payments.ts).
+      if (request.method === "POST" && new URL(request.url).pathname === "/api/paymob/callback") {
+        const { handlePaymobCallback } = await import("./lib/payments");
+        return withSecurityHeaders(await handlePaymobCallback(request));
+      }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
-      return await normalizeCatastrophicSsrResponse(response);
+      return withSecurityHeaders(await normalizeCatastrophicSsrResponse(response));
     } catch (error) {
       console.error(error);
-      return new Response(renderErrorPage(), {
-        status: 500,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      return withSecurityHeaders(
+        new Response(renderErrorPage(), {
+          status: 500,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      );
     }
   },
 };

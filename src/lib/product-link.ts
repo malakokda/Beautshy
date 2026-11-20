@@ -1,5 +1,5 @@
 import type { Offer } from "./price-results";
-import { findJsonLdProduct, isPublicHost, siteName, tryGetJson, USER_AGENT } from "./web";
+import { download, findJsonLdProduct, isPublicHost, siteName, tryGetJson } from "./web";
 
 const PAGE_TIMEOUT_MS = 8_000;
 const MAX_PAGE_BYTES = 3_000_000;
@@ -105,13 +105,13 @@ async function readShopifyProduct(
 }
 
 async function nameFromPage(url: URL): Promise<string | undefined> {
-  const res = await fetch(url, {
-    headers: { "user-agent": USER_AGENT, accept: "text/html" },
-    signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
-    redirect: "follow",
+  const res = await download(url, {
+    accept: "text/html",
+    timeoutMs: PAGE_TIMEOUT_MS,
+    maxBytes: MAX_PAGE_BYTES,
   });
-  if (!res.ok || !(res.headers.get("content-type") ?? "").includes("html")) return undefined;
-  const html = (await res.text()).slice(0, MAX_PAGE_BYTES);
+  if (res.status < 200 || res.status >= 300 || !res.contentType.includes("html")) return undefined;
+  const html = res.body;
 
   // 1. Structured product data (schema.org Product)
   const product = findJsonLdProduct(html);

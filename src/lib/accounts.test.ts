@@ -10,7 +10,7 @@ vi.mock("@tanstack/react-start/server", () => ({
 vi.mock("@/integrations/supabase/client.server", () => ({
   createSupabaseAuthClient: vi.fn(),
 }));
-
+import { createSupabaseAuthClient } from "@/integrations/supabase/client.server";
 import {
   getAccount,
   isAdmin,
@@ -19,9 +19,11 @@ import {
   reserveSearch,
   sessionToken,
   setPlan,
+  signUp,
   userFromToken,
 } from "./accounts";
 import { query } from "./db";
+import { NOT_ALLOWED_MESSAGE } from "./email-check";
 import { FREE_SEARCHES } from "./plans";
 
 const user = { id: "0b1c2d3e-0000-4000-8000-000000000001", email: "someone@example.com" };
@@ -52,6 +54,18 @@ describe("session cookie", () => {
     ).toString("base64url");
     expect(userFromToken(`${forged}.${signature}`)).toBeNull();
     expect(userFromToken(`${payload}.${"x".repeat(signature!.length)}`)).toBeNull();
+  });
+});
+
+describe("signUp", () => {
+  it("refuses other email providers without contacting Supabase", async () => {
+    for (const email of ["sara@outlook.com", "sara@yahoo.com.eg", "sara@cu.edu.eg"]) {
+      expect(await signUp(email, "a-good-password")).toEqual({
+        ok: false,
+        error: NOT_ALLOWED_MESSAGE,
+      });
+    }
+    expect(createSupabaseAuthClient).not.toHaveBeenCalled();
   });
 });
 
